@@ -1,7 +1,10 @@
 package dev.termdeck.shell
 
 import android.content.pm.PackageManager
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import dev.termdeck.priv.Mode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -24,16 +27,18 @@ class ShellSession(val name: String, val mode: Mode) {
     val lastLine: String
         get() = lines.lastOrNull { it.isNotBlank() } ?: "empty"
 
-    val isRunning: Boolean
-        get() = process?.isAlive == true
+    var isRunning by mutableStateOf(false)
+        private set
 
     fun start() {
         try {
             val p = openProcess()
             process = p
             writer = BufferedWriter(OutputStreamWriter(p.outputStream))
+            isRunning = true
             scope.launch {
                 pump(p.inputStream)
+                scope.launch(Dispatchers.Main) { isRunning = false }
                 post("[shell exited]")
             }
             scope.launch { pump(p.errorStream) }
@@ -62,6 +67,7 @@ class ShellSession(val name: String, val mode: Mode) {
 
     fun close() {
         process?.destroy()
+        isRunning = false
         scope.cancel()
     }
 

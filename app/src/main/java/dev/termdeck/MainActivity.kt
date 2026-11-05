@@ -94,6 +94,7 @@ fun TermApp() {
             .background(Bg)
             .statusBarsPadding()
             .navigationBarsPadding()
+            .imePadding()
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
