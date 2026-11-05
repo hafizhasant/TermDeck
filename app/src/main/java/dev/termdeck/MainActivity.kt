@@ -249,10 +249,14 @@ fun Tag(label: String) {
 @Composable
 fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit) {
     var input by remember { mutableStateOf("") }
+    val history = remember { mutableStateListOf<String>() }
+    var histIdx by remember { mutableStateOf(-1) }
     val listState = rememberLazyListState()
 
     val send: () -> Unit = {
         if (input.isNotBlank()) {
+            history.add(input)
+            histIdx = -1
             session.send(input)
             input = ""
         }
@@ -300,7 +304,21 @@ fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit
             items(session.lines) { line -> OutputLine(line) }
         }
 
-        ExtraKeys { key -> input += key }
+        ExtraKeys { key ->
+            when (key) {
+                "ESC" -> { input = ""; histIdx = -1 }
+                "TAB" -> input += "\t"
+                "UP" -> if (history.isNotEmpty()) {
+                    histIdx = if (histIdx < 0) history.size - 1 else maxOf(0, histIdx - 1)
+                    input = history[histIdx]
+                }
+                "DOWN" -> if (histIdx >= 0) {
+                    histIdx += 1
+                    if (histIdx >= history.size) { histIdx = -1; input = "" } else input = history[histIdx]
+                }
+                "DEL" -> input = input.dropLast(1)
+            }
+        }
 
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Box(
@@ -349,26 +367,25 @@ fun OutputLine(line: String) {
 
 @Composable
 fun ExtraKeys(onKey: (String) -> Unit) {
-    val rows: List<List<String>> = listOf(
-        listOf("|", "/", "~", "-", "&&", ";", "\$"),
-        listOf(">", "<", "*", "\"", "'", "=", ".")
+    val keys = listOf(
+        Pair("ESC", "ESC"),
+        Pair("TAB", "Tab"),
+        Pair("UP", "\u2191"),
+        Pair("DOWN", "\u2193"),
+        Pair("DEL", "Del")
     )
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        for (row in rows) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                for (k in row) {
-                    Box(
-                        Modifier
-                            .weight(1f)
-                            .height(36.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(Surface2)
-                            .clickable { onKey(k) },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(k, color = Accent, fontFamily = Mono, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                    }
-                }
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        for (k in keys) {
+            Box(
+                Modifier
+                    .weight(1f)
+                    .height(38.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Surface2)
+                    .clickable { onKey(k.first) },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(k.second, color = Accent, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             }
         }
     }
