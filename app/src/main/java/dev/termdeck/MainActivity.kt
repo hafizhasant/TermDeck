@@ -51,11 +51,6 @@ fun TermApp() {
         return s
     }
 
-    LaunchedEffect(Unit) {
-        if (sessions.isEmpty()) {
-            current = newSession()
-        }
-    }
 
     Column(
         Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 12.dp, vertical = 8.dp),
