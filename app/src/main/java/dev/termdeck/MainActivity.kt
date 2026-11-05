@@ -277,33 +277,22 @@ fun Tag(label: String) {
     )
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit) {
     val ctx = LocalContext.current
     val clipboard = ctx.getSystemService(ClipboardManager::class.java)
-    var input by remember { mutableStateOf("") }
-    val history = remember { mutableStateListOf<String>() }
-    var histIdx by remember { mutableStateOf(-1) }
     val listState = rememberLazyListState()
     val focus = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
     val imeVisible = WindowInsets.isImeVisible
-
-    fun send() {
-        if (input.isNotBlank()) {
-            history.add(input)
-            histIdx = -1
-            session.send(input)
-            input = ""
-        }
-    }
 
     fun paste() {
         val text = clipboard?.primaryClip?.getItemAt(0)?.coerceToText(ctx)?.toString()
         if (text.isNullOrEmpty()) {
             Toast.makeText(ctx, "Clipboard is empty", Toast.LENGTH_SHORT).show()
         } else {
-            input += text.replace("\n", " ")
+            session.sendRaw(text.replace("\r", "").replace("\n", "\r"))
         }
     }
 
@@ -340,20 +329,19 @@ fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit
                     fontSize = 11.sp
                 )
             }
-            Pill("Copy all") { copyAll() }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Pill("Paste") { paste() }
+                Pill("Copy") { copyAll() }
+            }
         }
 
+        // Tap the output to show or hide the keyboard. Typed keys go straight to the shell.
         SelectionContainer(
             Modifier
                 .weight(1f)
                 .fillMaxWidth()
                 .clickable {
-                    if (imeVisible) {
-                        focusManager.clearFocus()
-                    } else {
-                        focusManager.clearFocus()
-                        focus.requestFocus()
-                    }
+                    if (imeVisible) focusManager.clearFocus() else focus.requestFocus()
                 }
         ) {
             LazyColumn(
@@ -370,45 +358,32 @@ fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit
 
         ExtraKeys { key ->
             when (key) {
-                "ESC" -> { input = ""; histIdx = -1 }
-                "TAB" -> input += "\t"
-                "UP" -> if (history.isNotEmpty()) {
-                    histIdx = if (histIdx < 0) history.size - 1 else maxOf(0, histIdx - 1)
-                    input = history[histIdx]
-                }
-                "DOWN" -> if (histIdx >= 0) {
-                    histIdx += 1
-                    if (histIdx >= history.size) { histIdx = -1; input = "" } else input = history[histIdx]
-                }
-                "DEL" -> input = input.dropLast(1)
-                "CLEAR" -> input = ""
+                "ESC" -> session.sendRaw("\u001b")
+                "TAB" -> session.sendRaw("\t")
+                "UP" -> session.sendRaw("\u001b[A")
+                "DOWN" -> session.sendRaw("\u001b[B")
+                "DEL" -> session.sendRaw("\u007F")
+                "CTRL-C" -> session.sendRaw("\u0003")
             }
         }
 
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(
-                value = input,
-                onValueChange = { input = it },
-                modifier = Modifier.weight(1f).focusRequester(focus),
-                singleLine = true,
-                placeholder = { Text("command", color = Muted, fontFamily = Mono, fontSize = 14.sp) },
-                textStyle = TextStyle(color = TextMain, fontFamily = Mono, fontSize = 14.sp),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { send() }),
-                shape = RoundedCornerShape(14.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Accent,
-                    unfocusedBorderColor = Line,
-                    focusedContainerColor = Surface2,
-                    unfocusedContainerColor = Surface2,
-                    cursorColor = Accent,
-                    focusedTextColor = TextMain,
-                    unfocusedTextColor = TextMain
-                )
-            )
-            Pill("Paste") { paste() }
-            Pill("Run", selected = true) { send() }
-        }
+        // Invisible field that receives keystrokes. The sentinel space lets us detect
+        // typed characters and backspace even though the field shows nothing.
+        BasicTextField(
+            value = " ",
+            onValueChange = { new ->
+                when {
+                    new.isEmpty() -> session.sendRaw("\u007F")
+                    new.length > 1 -> session.sendRaw(new.substring(1).replace("\n", "\r"))
+                }
+            },
+            modifier = Modifier.size(1.dp).focusRequester(focus),
+            textStyle = TextStyle(color = Color.Transparent, fontSize = 1.sp),
+            cursorBrush = SolidColor(Color.Transparent),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+            keyboardActions = KeyboardActions(onSend = { session.sendRaw("\r") })
+        )
     }
 }
 
@@ -430,7 +405,6 @@ fun OutputLine(line: String) {
     )
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ExtraKeys(onKey: (String) -> Unit) {
     val haptic = LocalHapticFeedback.current
@@ -439,7 +413,8 @@ fun ExtraKeys(onKey: (String) -> Unit) {
         Pair("TAB", "Tab"),
         Pair("UP", "\u2191"),
         Pair("DOWN", "\u2193"),
-        Pair("DEL", "Del")
+        Pair("DEL", "Del"),
+        Pair("CTRL-C", "^C")
     )
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         for (k in keys) {
@@ -449,16 +424,10 @@ fun ExtraKeys(onKey: (String) -> Unit) {
                     .height(38.dp)
                     .clip(RoundedCornerShape(10.dp))
                     .background(Surface2)
-                    .combinedClickable(
-                        onClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            onKey(k.first)
-                        },
-                        onLongClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            if (k.first == "DEL") onKey("CLEAR")
-                        }
-                    ),
+                    .clickable {
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onKey(k.first)
+                    },
                 contentAlignment = Alignment.Center
             ) {
                 Text(k.second, color = Accent, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)

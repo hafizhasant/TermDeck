@@ -95,6 +95,18 @@ class ShellSession(val name: String, val mode: Mode) {
         }
     }
 
+    fun sendRaw(text: String) {
+        scope.launch {
+            val w = writer
+            if (w == null || !isRunning) return@launch
+            try {
+                w.write(text)
+                w.flush()
+            } catch (e: Throwable) {
+            }
+        }
+    }
+
     fun close() {
         try { writer?.close() } catch (_: Throwable) {}
         try { process?.destroy() } catch (_: Throwable) {}
