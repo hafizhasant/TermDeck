@@ -8,7 +8,12 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -35,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.termdeck.priv.Mode
 import dev.termdeck.priv.PrivilegeManager
+import dev.termdeck.shell.SessionStore
 import dev.termdeck.shell.ShellSession
 
 private val Bg = Color(0xFF0D0F14)
@@ -56,6 +62,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         CrashLog.install(this)
+        if (android.os.Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 2002)
         if (checkSelfPermission(TERMUX_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(TERMUX_PERMISSION), 2001)
         }
@@ -82,11 +89,11 @@ fun TermApp() {
         )
     }
 
-    val sessions = remember { mutableStateListOf<ShellSession>() }
+    val ctx = LocalContext.current
+    val sessions = SessionStore.sessions
     var screen by remember { mutableStateOf(Screen.SESSIONS) }
     var current by remember { mutableStateOf<ShellSession?>(null) }
     var defaultMode by remember { mutableStateOf(Mode.SHIZUKU) }
-    var counter by remember { mutableStateOf(1) }
 
     Column(
         Modifier
@@ -102,11 +109,7 @@ fun TermApp() {
             screen = screen,
             onSelect = { screen = it },
             onNew = {
-                val s = ShellSession("session-$counter", defaultMode)
-                counter += 1
-                s.start()
-                sessions.add(s)
-                current = s
+                current = SessionStore.create(ctx, defaultMode)
                 screen = Screen.TERMINAL
             }
         )
@@ -178,6 +181,19 @@ fun TopBar(screen: Screen, onSelect: (Screen) -> Unit, onNew: () -> Unit) {
 @Composable
 fun SessionsScreen(sessions: List<ShellSession>, modifier: Modifier, onOpen: (ShellSession) -> Unit) {
     val running = sessions.count { it.isRunning }
+    val ctx = LocalContext.current
+    var pendingClose by remember { mutableStateOf<ShellSession?>(null) }
+    pendingClose?.let { s ->
+        AlertDialog(
+            onDismissRequest = { pendingClose = null },
+            title = { Text("Close ${s.name}?") },
+            text = { Text("The shell and any running command in it will stop.") },
+            confirmButton = {
+                TextButton(onClick = { SessionStore.close(ctx, s); pendingClose = null }) { Text("Close") }
+            },
+            dismissButton = { TextButton(onClick = { pendingClose = null }) { Text("Cancel") } }
+        )
+    }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("Sessions", color = TextMain, fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Text(
@@ -191,21 +207,29 @@ fun SessionsScreen(sessions: List<ShellSession>, modifier: Modifier, onOpen: (Sh
         }
         LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             items(sessions) { s ->
-                SessionCard(s) { onOpen(s) }
+                SessionCard(s, onClick = { onOpen(s) }, onLongClick = { pendingClose = s })
             }
         }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun SessionCard(s: ShellSession, onClick: () -> Unit) {
+fun SessionCard(s: ShellSession, onClick: () -> Unit, onLongClick: () -> Unit) {
+    val haptic = LocalHapticFeedback.current
     Column(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
             .background(Surface)
             .border(1.dp, if (s.isRunning) Accent.copy(alpha = 0.35f) else Line, RoundedCornerShape(16.dp))
-            .clickable { onClick() }
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onLongClick()
+                }
+            )
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
@@ -292,16 +316,17 @@ fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit
             }
         }
 
-        LazyColumn(
-            state = listState,
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(14.dp))
-                .background(Surface)
-                .padding(12.dp)
-        ) {
-            items(session.lines) { line -> OutputLine(line) }
+        SelectionContainer(Modifier.weight(1f).fillMaxWidth()) {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(Surface)
+                    .padding(12.dp)
+            ) {
+                items(session.lines) { line -> OutputLine(line) }
+            }
         }
 
         ExtraKeys { key ->
@@ -317,6 +342,7 @@ fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit
                     if (histIdx >= history.size) { histIdx = -1; input = "" } else input = history[histIdx]
                 }
                 "DEL" -> input = input.dropLast(1)
+                "CLEAR" -> input = ""
             }
         }
 
@@ -365,8 +391,10 @@ fun OutputLine(line: String) {
     )
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ExtraKeys(onKey: (String) -> Unit) {
+    val haptic = LocalHapticFeedback.current
     val keys = listOf(
         Pair("ESC", "ESC"),
         Pair("TAB", "Tab"),
@@ -382,7 +410,16 @@ fun ExtraKeys(onKey: (String) -> Unit) {
                     .height(38.dp)
                     .clip(RoundedCornerShape(10.dp))
                     .background(Surface2)
-                    .clickable { onKey(k.first) },
+                    .combinedClickable(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            onKey(k.first)
+                        },
+                        onLongClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            if (k.first == "DEL") onKey("CLEAR")
+                        }
+                    ),
                 contentAlignment = Alignment.Center
             ) {
                 Text(k.second, color = Accent, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
