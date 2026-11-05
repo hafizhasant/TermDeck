@@ -287,6 +287,10 @@ fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit
     val focusManager = LocalFocusManager.current
     val imeVisible = WindowInsets.isImeVisible
 
+    // A zero-width sentinel lets Backspace on an empty field still reach the shell.
+    val base = "\u200B"
+    var typed by remember { mutableStateOf(base) }
+
     fun paste() {
         val text = clipboard?.primaryClip?.getItemAt(0)?.coerceToText(ctx)?.toString()
         if (text.isNullOrEmpty()) {
@@ -301,9 +305,10 @@ fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit
         Toast.makeText(ctx, "Output copied", Toast.LENGTH_SHORT).show()
     }
 
-    LaunchedEffect(session.lines.size) {
+    // Scroll whenever a line is added or the current line changes, so typing stays visible.
+    LaunchedEffect(session.lines.size, session.lines.lastOrNull()) {
         if (session.lines.isNotEmpty()) {
-            listState.animateScrollToItem(session.lines.size - 1)
+            listState.animateScrollToItem(session.lines.lastIndex)
         }
     }
 
@@ -335,7 +340,7 @@ fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit
             }
         }
 
-        // Tap the output to show or hide the keyboard. Typed keys go straight to the shell.
+        // Tap the output to show or hide the keyboard.
         SelectionContainer(
             Modifier
                 .weight(1f)
@@ -367,14 +372,23 @@ fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit
             }
         }
 
-        // Invisible field that receives keystrokes. The sentinel space lets us detect
-        // typed characters and backspace even though the field shows nothing.
+        // Hidden field that receives keystrokes. Each change sends only the difference.
         BasicTextField(
-            value = " ",
-            onValueChange = { new ->
-                when {
-                    new.isEmpty() -> session.sendRaw("\u007F")
-                    new.length > 1 -> session.sendRaw(new.substring(1).replace("\n", "\r"))
+            value = typed,
+            onValueChange = { newValue ->
+                if (newValue.contains('\n')) {
+                    session.sendRaw("\r")
+                    typed = base
+                } else {
+                    val prev = typed
+                    var common = 0
+                    val max = minOf(prev.length, newValue.length)
+                    while (common < max && prev[common] == newValue[common]) common++
+                    val out = StringBuilder()
+                    repeat(prev.length - common) { out.append('\u007F') }
+                    out.append(newValue.substring(common))
+                    if (out.isNotEmpty()) session.sendRaw(out.toString())
+                    typed = if (newValue.startsWith(base) && newValue.length < 200) newValue else base
                 }
             },
             modifier = Modifier.size(1.dp).focusRequester(focus),
@@ -382,7 +396,10 @@ fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit
             cursorBrush = SolidColor(Color.Transparent),
             singleLine = true,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-            keyboardActions = KeyboardActions(onSend = { session.sendRaw("\r") })
+            keyboardActions = KeyboardActions(onSend = {
+                session.sendRaw("\r")
+                typed = base
+            })
         )
     }
 }

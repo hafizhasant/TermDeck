@@ -12,6 +12,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import rikka.shizuku.Shizuku
@@ -50,6 +51,20 @@ class ShellSession(val name: String, val mode: Mode) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var process: Process? = null
     private var writer: BufferedWriter? = null
+    private val writes = Channel<String>(Channel.UNLIMITED)
+
+    init {
+        scope.launch {
+            for (t in writes) {
+                val w = writer ?: continue
+                try {
+                    w.write(t)
+                    w.flush()
+                } catch (_: Throwable) {
+                }
+            }
+        }
+    }
     private var partial = ""
     private var pendingShown = false
 
@@ -96,15 +111,7 @@ class ShellSession(val name: String, val mode: Mode) {
     }
 
     fun sendRaw(text: String) {
-        scope.launch {
-            val w = writer
-            if (w == null || !isRunning) return@launch
-            try {
-                w.write(text)
-                w.flush()
-            } catch (e: Throwable) {
-            }
-        }
+        writes.trySend(text)
     }
 
     fun close() {
