@@ -1,5 +1,6 @@
 package dev.termdeck.shell
 
+import android.content.pm.PackageManager
 import androidx.compose.runtime.mutableStateListOf
 import dev.termdeck.priv.Mode
 import kotlinx.coroutines.CoroutineScope
@@ -9,11 +10,11 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import rikka.shizuku.Shizuku
 import java.io.BufferedWriter
+import java.io.InputStream
 import java.io.OutputStreamWriter
+import java.lang.reflect.InvocationTargetException
 
-// One long-lived sh process per session. Commands are written to its stdin,
-// and output from stdout and stderr is appended to lines.
-// This is not a PTY, so full-screen programs (vim, top) will not work.
+// One long-lived sh process per session. Not a PTY: full-screen programs will not work.
 class ShellSession(val name: String, val mode: Mode) {
     val lines = mutableStateListOf<String>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -32,14 +33,12 @@ class ShellSession(val name: String, val mode: Mode) {
             process = p
             writer = BufferedWriter(OutputStreamWriter(p.outputStream))
             scope.launch {
-                p.inputStream.bufferedReader().forEachLine { post(it) }
+                pump(p.inputStream)
                 post("[shell exited]")
             }
-            scope.launch {
-                p.errorStream.bufferedReader().forEachLine { post(it) }
-            }
+            scope.launch { pump(p.errorStream) }
         } catch (e: Throwable) {
-            post("error: ${e.message}")
+            post("error: ${describe(e)}")
         }
     }
 
@@ -48,7 +47,7 @@ class ShellSession(val name: String, val mode: Mode) {
         scope.launch {
             val w = writer
             if (w == null) {
-                post("error: shell not running")
+                post("error: shell not running. Tap + to start a new session.")
                 return@launch
             }
             try {
@@ -56,7 +55,7 @@ class ShellSession(val name: String, val mode: Mode) {
                 w.write("\n")
                 w.flush()
             } catch (e: Throwable) {
-                post("error: ${e.message}")
+                post("error: ${describe(e)}")
             }
         }
     }
@@ -66,12 +65,31 @@ class ShellSession(val name: String, val mode: Mode) {
         scope.cancel()
     }
 
+    private fun pump(stream: InputStream) {
+        try {
+            stream.bufferedReader().forEachLine { post(it) }
+        } catch (e: Throwable) {
+            post("read error: ${describe(e)}")
+        }
+    }
+
     private fun post(line: String) {
         scope.launch(Dispatchers.Main) { lines.add(line) }
     }
 
-    private fun openProcess(): Process = when (mode) {
-        Mode.SHIZUKU -> {
+    private fun describe(e: Throwable): String {
+        val cause = (e as? InvocationTargetException)?.targetException ?: e
+        return cause.message ?: cause.javaClass.simpleName
+    }
+
+    private fun openProcess(): Process {
+        if (mode == Mode.SHIZUKU) {
+            if (!Shizuku.pingBinder()) {
+                throw IllegalStateException("Shizuku is not running. Start it, then tap + for a new session.")
+            }
+            if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
+                throw IllegalStateException("Shizuku not granted. Open Setup, tap Grant Shizuku, then tap + for a new session.")
+            }
             val m = Shizuku::class.java.getDeclaredMethod(
                 "newProcess",
                 Array<String>::class.java,
@@ -79,8 +97,8 @@ class ShellSession(val name: String, val mode: Mode) {
                 String::class.java
             )
             m.isAccessible = true
-            m.invoke(null, arrayOf("sh"), null, null) as Process
+            return m.invoke(null, arrayOf("sh"), null, null) as Process
         }
-        else -> ProcessBuilder("sh").start()
+        return ProcessBuilder("sh").start()
     }
 }
