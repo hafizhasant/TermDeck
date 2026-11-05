@@ -38,7 +38,7 @@ fun TermScreen() {
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf(Mode.NONE to "None", Mode.SHIZUKU to "Shizuku", Mode.ROOT to "Root")
+            listOf(Mode.NONE to "None", Mode.SHIZUKU to "Shizuku") + if (PrivilegeManager.hasRoot()) listOf(Mode.ROOT to "Root") else emptyList()
                 .forEach { (m, label) ->
                     FilterChip(
                         selected = mode == m,
