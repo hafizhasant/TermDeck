@@ -42,6 +42,11 @@ import dev.termdeck.priv.Mode
 import dev.termdeck.priv.PrivilegeManager
 import dev.termdeck.shell.SessionStore
 import android.content.ClipData
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -282,7 +287,18 @@ fun Tag(label: String) {
 fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit) {
     val ctx = LocalContext.current
     val clipboard = ctx.getSystemService(ClipboardManager::class.java)
-    val listState = rememberLazyListState()
+    val scrollState = rememberScrollState()
+    val annotated = buildAnnotatedString {
+        session.lines.forEachIndexed { i, line ->
+            val c = when {
+                line.startsWith("error") || line.startsWith("read error") -> Err
+                line.startsWith("[") -> Muted
+                else -> TextMain
+            }
+            withStyle(SpanStyle(color = c)) { append(line) }
+            if (i < session.lines.lastIndex) append("\n")
+        }
+    }
     val focus = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
     val imeVisible = WindowInsets.isImeVisible
@@ -307,9 +323,8 @@ fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit
 
     // Scroll whenever a line is added or the current line changes, so typing stays visible.
     LaunchedEffect(session.lines.size, session.lines.lastOrNull()) {
-        if (session.lines.isNotEmpty()) {
-            listState.animateScrollToItem(session.lines.lastIndex)
-        }
+        withFrameNanos { }
+        scrollState.animateScrollTo(scrollState.maxValue)
     }
 
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -357,19 +372,19 @@ fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit
             Modifier
                 .weight(1f)
                 .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(Surface)
                 .clickable {
                     if (imeVisible) focusManager.clearFocus() else focus.requestFocus()
                 }
         ) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier
+            Column(
+                Modifier
                     .fillMaxSize()
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(Surface)
+                    .verticalScroll(scrollState)
                     .padding(12.dp)
             ) {
-                items(session.lines) { line -> OutputLine(line) }
+                Text(annotated, fontFamily = Mono, fontSize = 12.sp, lineHeight = 17.sp)
             }
         }
 
