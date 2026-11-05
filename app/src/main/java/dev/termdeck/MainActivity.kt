@@ -467,6 +467,7 @@ fun SetupScreen(mode: Mode, onMode: (Mode) -> Unit, modifier: Modifier) {
     val termuxReady = context.checkSelfPermission(TERMUX_PERMISSION) == PackageManager.PERMISSION_GRANTED
     Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Setup", color = TextMain, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        PtyTestCard()
 
         Text("Default mode for new sessions", color = Muted, fontSize = 12.sp)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -502,5 +503,83 @@ fun SetupScreen(mode: Mode, onMode: (Mode) -> Unit, modifier: Modifier) {
                 fontSize = 12.sp
             )
         }
+    }
+}
+
+@Composable
+fun PtyTestCard() {
+    val context = LocalContext.current
+    var result by remember { mutableStateOf("Tap Run test to check the PTY helper.") }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(Surface)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text("PTY test", color = TextMain, fontWeight = FontWeight.SemiBold)
+        Text(result, color = Muted, fontFamily = Mono, fontSize = 11.sp, lineHeight = 15.sp)
+        Pill("Run test") {
+            result = "running..."
+            Thread {
+                val out = ptyTest(context)
+                android.os.Handler(android.os.Looper.getMainLooper()).post { result = out }
+            }.start()
+        }
+    }
+}
+
+fun ptyTest(context: Context): String {
+    val path = context.applicationInfo.nativeLibraryDir + "/libtermdeckpty.so"
+    val sb = StringBuilder()
+    sb.append("helper: ").append(path).append("\n")
+    sb.append("exists: ").append(java.io.File(path).exists()).append("\n")
+    sb.append("--- app user ---\n")
+    sb.append(
+        try {
+            val pb = ProcessBuilder(path).redirectErrorStream(true)
+            runPty(pb.start())
+        } catch (e: Throwable) {
+            "error: " + (e.message ?: e.javaClass.simpleName)
+        }
+    )
+    sb.append("\n--- shizuku ---\n")
+    sb.append(
+        try {
+            if (!dev.termdeck.priv.PrivilegeManager.shizukuReady()) {
+                "Shizuku not granted"
+            } else {
+                val m = rikka.shizuku.Shizuku::class.java.getDeclaredMethod(
+                    "newProcess",
+                    Array<String>::class.java,
+                    Array<String>::class.java,
+                    String::class.java
+                )
+                m.isAccessible = true
+                val p = m.invoke(null, arrayOf("sh", "-c", path), null, null) as Process
+                runPty(p)
+            }
+        } catch (e: Throwable) {
+            val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
+            "error: " + (cause.message ?: cause.javaClass.simpleName)
+        }
+    )
+    return sb.toString()
+}
+
+fun runPty(p: Process): String {
+    return try {
+        Thread {
+            Thread.sleep(8000)
+            p.destroy()
+        }.start()
+        p.outputStream.write("id\nexit\n".toByteArray())
+        p.outputStream.flush()
+        val text = p.inputStream.bufferedReader().readText()
+        val clean = text.replace(Regex("\u001B\\[[0-9;?]*[ -/]*[@-~]"), "")
+        if (clean.isBlank()) "no output" else clean.take(1500)
+    } catch (e: Throwable) {
+        "error: " + (e.message ?: e.javaClass.simpleName)
     }
 }
