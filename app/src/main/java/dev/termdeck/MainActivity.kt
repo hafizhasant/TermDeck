@@ -290,12 +290,7 @@ fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit
     val scrollState = rememberScrollState()
     val annotated = buildAnnotatedString {
         session.lines.forEachIndexed { i, line ->
-            val c = when {
-                line.startsWith("error") || line.startsWith("read error") -> Err
-                line.startsWith("[") -> Muted
-                else -> TextMain
-            }
-            withStyle(SpanStyle(color = c)) { append(line) }
+            append(line)
             if (i < session.lines.lastIndex) append("\n")
         }
     }
@@ -317,7 +312,7 @@ fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit
     }
 
     fun copyAll() {
-        clipboard?.setPrimaryClip(ClipData.newPlainText("TermDeck", session.lines.joinToString("\n")))
+        clipboard?.setPrimaryClip(ClipData.newPlainText("TermDeck", session.lines.joinToString("\n") { it.text }))
         Toast.makeText(ctx, "Output copied", Toast.LENGTH_SHORT).show()
     }
 
