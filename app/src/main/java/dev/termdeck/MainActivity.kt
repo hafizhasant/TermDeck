@@ -335,8 +335,20 @@ fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Pill("^C") { session.sendRaw("\u0003") }
                 Pill("Paste") { paste() }
                 Pill("Copy") { copyAll() }
+            }
+        }
+
+        ExtraKeys { key ->
+            when (key) {
+                "ESC" -> session.sendRaw("\u001b")
+                "TAB" -> session.sendRaw("\t")
+                "UP" -> session.sendRaw("\u001b[A")
+                "DOWN" -> session.sendRaw("\u001b[B")
+                "DEL" -> session.sendRaw("\u007F")
+                "CTRL-C" -> session.sendRaw("\u0003")
             }
         }
 
@@ -358,17 +370,6 @@ fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit
                     .padding(12.dp)
             ) {
                 items(session.lines) { line -> OutputLine(line) }
-            }
-        }
-
-        ExtraKeys { key ->
-            when (key) {
-                "ESC" -> session.sendRaw("\u001b")
-                "TAB" -> session.sendRaw("\t")
-                "UP" -> session.sendRaw("\u001b[A")
-                "DOWN" -> session.sendRaw("\u001b[B")
-                "DEL" -> session.sendRaw("\u007F")
-                "CTRL-C" -> session.sendRaw("\u0003")
             }
         }
 
