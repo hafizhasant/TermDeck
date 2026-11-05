@@ -377,20 +377,13 @@ fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit
         BasicTextField(
             value = typed,
             onValueChange = { newValue ->
-                if (newValue.contains('\n')) {
-                    session.sendRaw("\r")
-                    typed = base
+                if (newValue.isEmpty()) {
+                    session.sendRaw("\u007F")
                 } else {
-                    val prev = typed
-                    var common = 0
-                    val max = minOf(prev.length, newValue.length)
-                    while (common < max && prev[common] == newValue[common]) common++
-                    val out = StringBuilder()
-                    repeat(prev.length - common) { out.append('\u007F') }
-                    out.append(newValue.substring(common))
-                    if (out.isNotEmpty()) session.sendRaw(out.toString())
-                    typed = if (newValue.startsWith(base) && newValue.length < 200) newValue else base
+                    val text = newValue.replace(base, "").replace("\n", "\r")
+                    if (text.isNotEmpty()) session.sendRaw(text)
                 }
+                typed = base
             },
             modifier = Modifier.size(1.dp).focusRequester(focus),
             textStyle = TextStyle(color = Color.Transparent, fontSize = 1.sp),
