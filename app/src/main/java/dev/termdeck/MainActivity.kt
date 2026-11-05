@@ -1,19 +1,32 @@
 package dev.termdeck
 
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -24,128 +37,218 @@ import dev.termdeck.priv.Mode
 import dev.termdeck.priv.PrivilegeManager
 import dev.termdeck.shell.ShellSession
 
+private val Bg = Color(0xFF0D0F14)
+private val Surface = Color(0xFF161A22)
+private val Surface2 = Color(0xFF1D222C)
+private val Line = Color(0xFF262C38)
+private val TextMain = Color(0xFFE6E9EF)
+private val Muted = Color(0xFF7D8596)
+private val Accent = Color(0xFF5EEAD4)
+private val Accent2 = Color(0xFFA78BFA)
+private val Ok = Color(0xFF86EFAC)
+private val Err = Color(0xFFF87171)
+private val Mono = FontFamily.Monospace
+private const val TERMUX_PERMISSION = "com.termux.permission.RUN_COMMAND"
+
+enum class Screen { SESSIONS, PACKAGES, SETUP, TERMINAL }
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CrashLog.install(this)
+        if (checkSelfPermission(TERMUX_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(TERMUX_PERMISSION), 2001)
+        }
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme()) { TermApp() }
+            MaterialTheme(
+                colorScheme = darkColorScheme(background = Bg, surface = Surface, primary = Accent)
+            ) { TermApp() }
         }
     }
 }
 
-enum class Screen { SESSIONS, PACKAGES, SETUP, TERMINAL }
-
 @Composable
 fun TermApp() {
+    val crash = remember { CrashLog.read() }
+    var showCrash by remember { mutableStateOf(crash != null) }
+    if (showCrash && crash != null) {
+        AlertDialog(
+            onDismissRequest = { CrashLog.clear(); showCrash = false },
+            title = { Text("Last crash") },
+            text = { Text(crash, fontFamily = Mono, fontSize = 9.sp) },
+            confirmButton = {
+                TextButton(onClick = { CrashLog.clear(); showCrash = false }) { Text("Dismiss") }
+            }
+        )
+    }
+
     val sessions = remember { mutableStateListOf<ShellSession>() }
     var screen by remember { mutableStateOf(Screen.SESSIONS) }
     var current by remember { mutableStateOf<ShellSession?>(null) }
     var defaultMode by remember { mutableStateOf(Mode.SHIZUKU) }
     var counter by remember { mutableStateOf(1) }
 
-    fun newSession(): ShellSession {
-        val s = ShellSession("session-$counter", defaultMode)
-        counter += 1
-        s.start()
-        sessions.add(s)
-        return s
-    }
-
-
     Column(
-        Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+        Modifier
+            .fillMaxSize()
+            .background(Bg)
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         TopBar(
             screen = screen,
-            onMenu = { screen = it },
+            onSelect = { screen = it },
             onNew = {
-                current = newSession()
+                val s = ShellSession("session-$counter", defaultMode)
+                counter += 1
+                s.start()
+                sessions.add(s)
+                current = s
                 screen = Screen.TERMINAL
             }
         )
         when (screen) {
-            Screen.SESSIONS -> SessionList(
-                sessions = sessions,
-                onOpen = { current = it; screen = Screen.TERMINAL },
-                modifier = Modifier.weight(1f)
-            )
-            Screen.TERMINAL -> {
-                val s = current
-                if (s != null) TerminalView(s, Modifier.weight(1f))
+            Screen.SESSIONS -> SessionsScreen(sessions, Modifier.weight(1f)) {
+                current = it
+                screen = Screen.TERMINAL
             }
-            Screen.PACKAGES -> Box(Modifier.weight(1f)) {
-                Text("Packages: coming next")
+            Screen.TERMINAL -> current?.let { s ->
+                TerminalScreen(s, Modifier.weight(1f)) { screen = Screen.SESSIONS }
             }
-            Screen.SETUP -> SetupView(
-                mode = defaultMode,
-                onMode = { defaultMode = it },
-                modifier = Modifier.weight(1f)
-            )
+            Screen.PACKAGES -> PackagesScreen(Modifier.weight(1f))
+            Screen.SETUP -> SetupScreen(defaultMode, { defaultMode = it }, Modifier.weight(1f))
         }
     }
 }
 
 @Composable
-fun TopBar(screen: Screen, onMenu: (Screen) -> Unit, onNew: () -> Unit) {
-    val tabs = listOf(
-        Screen.SESSIONS to "Sessions",
-        Screen.PACKAGES to "Packages",
-        Screen.SETUP to "Setup"
+fun TopBar(screen: Screen, onSelect: (Screen) -> Unit, onNew: () -> Unit) {
+    val tabs: List<Pair<Screen, String>> = listOf(
+        Pair(Screen.SESSIONS, "Sessions"),
+        Pair(Screen.PACKAGES, "Packages"),
+        Pair(Screen.SETUP, "Setup")
     )
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        for (t in tabs) {
-            val selected = screen == t.first ||
-                (t.first == Screen.SESSIONS && screen == Screen.TERMINAL)
-            FilterChip(
-                selected = selected,
-                onClick = { onMenu(t.first) },
-                label = { Text(t.second, fontSize = 12.sp) }
-            )
-        }
-        Spacer(Modifier.weight(1f))
-        OutlinedButton(onClick = onNew) { Text("+") }
-    }
-}
-
-@Composable
-fun SessionList(sessions: List<ShellSession>, onOpen: (ShellSession) -> Unit, modifier: Modifier) {
-    LazyColumn(modifier = modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        items(sessions) { s ->
-            Card(modifier = Modifier.fillMaxWidth().clickable { onOpen(s) }) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(s.name, fontWeight = FontWeight.SemiBold)
-                        Spacer(Modifier.weight(1f))
-                        Text(s.mode.name.lowercase(), style = MaterialTheme.typography.labelSmall)
-                    }
+    val active: Screen = if (screen == Screen.TERMINAL) Screen.SESSIONS else screen
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier
+                .weight(1f)
+                .clip(RoundedCornerShape(14.dp))
+                .background(Surface)
+                .padding(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            for (t in tabs) {
+                val selected = active == t.first
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(if (selected) Surface2 else Color.Transparent)
+                        .clickable { onSelect(t.first) }
+                        .padding(vertical = 9.dp),
+                    contentAlignment = Alignment.Center
+                ) {
                     Text(
-                        if (s.isRunning) "running" else "stopped",
-                        style = MaterialTheme.typography.labelSmall
-                    )
-                    Text(
-                        s.lastLine,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        t.second,
+                        color = if (selected) Accent else Muted,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
                     )
                 }
             }
         }
+        Spacer(Modifier.width(10.dp))
+        Box(
+            Modifier
+                .size(42.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(Surface2)
+                .clickable { onNew() },
+            contentAlignment = Alignment.Center
+        ) {
+            Text("+", color = Accent2, fontSize = 22.sp, fontWeight = FontWeight.Medium)
+        }
     }
 }
 
 @Composable
-fun TerminalView(session: ShellSession, modifier: Modifier) {
-    var input by remember { mutableStateOf("") }
-    val listState = rememberLazyListState()
-
-    LaunchedEffect(session.lines.size) {
-        if (session.lines.isNotEmpty()) {
-            listState.animateScrollToItem(session.lines.size - 1)
+fun SessionsScreen(sessions: List<ShellSession>, modifier: Modifier, onOpen: (ShellSession) -> Unit) {
+    val running = sessions.count { it.isRunning }
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text("Sessions", color = TextMain, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        Text(
+            "${sessions.size} sessions · $running running",
+            color = Muted,
+            fontFamily = Mono,
+            fontSize = 11.sp
+        )
+        if (sessions.isEmpty()) {
+            Text("No sessions yet. Tap + to start one.", color = Muted, fontSize = 14.sp)
+        }
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            items(sessions) { s ->
+                SessionCard(s) { onOpen(s) }
+            }
         }
     }
+}
+
+@Composable
+fun SessionCard(s: ShellSession, onClick: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(Surface)
+            .border(1.dp, if (s.isRunning) Accent.copy(alpha = 0.35f) else Line, RoundedCornerShape(16.dp))
+            .clickable { onClick() }
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier
+                    .size(7.dp)
+                    .clip(CircleShape)
+                    .background(if (s.isRunning) Ok else Muted)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(s.name, color = TextMain, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.weight(1f))
+            Tag(s.mode.name.lowercase())
+        }
+        Text(
+            s.lastLine,
+            color = Muted,
+            fontFamily = Mono,
+            fontSize = 12.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+fun Tag(label: String) {
+    Text(
+        label,
+        color = Accent2,
+        fontFamily = Mono,
+        fontSize = 10.sp,
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(Accent2.copy(alpha = 0.15f))
+            .padding(horizontal = 7.dp, vertical = 3.dp)
+    )
+}
+
+@Composable
+fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit) {
+    var input by remember { mutableStateOf("") }
+    val listState = rememberLazyListState()
 
     val send: () -> Unit = {
         if (input.isNotBlank()) {
@@ -154,66 +257,232 @@ fun TerminalView(session: ShellSession, modifier: Modifier) {
         }
     }
 
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.weight(1f).fillMaxWidth()
-        ) {
-            items(session.lines) { line ->
-                Text(line, fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 16.sp)
-            }
-        }
-        ExtraKeys { key -> input += key }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(
-                value = input,
-                onValueChange = { input = it },
-                modifier = Modifier.weight(1f),
-                singleLine = true,
-                label = { Text("command") },
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { send() })
-            )
-            Button(onClick = send) { Text("Run") }
+    LaunchedEffect(session.lines.size) {
+        if (session.lines.isNotEmpty()) {
+            listState.animateScrollToItem(session.lines.size - 1)
         }
     }
+
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier
+                    .size(36.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Surface2)
+                    .clickable { onBack() },
+                contentAlignment = Alignment.Center
+            ) {
+                Text("‹", color = TextMain, fontSize = 20.sp)
+            }
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(session.name, color = TextMain, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "~ · ${session.mode.name.lowercase()}",
+                    color = Muted,
+                    fontFamily = Mono,
+                    fontSize = 11.sp
+                )
+            }
+        }
+
+        LazyColumn(
+            state = listState,
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(Surface)
+                .padding(12.dp)
+        ) {
+            items(session.lines) { line -> OutputLine(line) }
+        }
+
+        ExtraKeys { key -> input += key }
+
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(
+                Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(Surface2)
+                    .padding(horizontal = 14.dp, vertical = 12.dp)
+            ) {
+                BasicTextField(
+                    value = input,
+                    onValueChange = { input = it },
+                    singleLine = true,
+                    textStyle = TextStyle(color = TextMain, fontFamily = Mono, fontSize = 14.sp),
+                    cursorBrush = SolidColor(Accent),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = { send() }),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (input.isEmpty()) {
+                    Text("command", color = Muted, fontFamily = Mono, fontSize = 14.sp)
+                }
+            }
+            Pill("Run", selected = true) { send() }
+        }
+    }
+}
+
+@Composable
+fun OutputLine(line: String) {
+    val color: Color = when {
+        line.startsWith("\$ ") -> Accent
+        line.startsWith("error") || line.startsWith("read error") -> Err
+        line.startsWith("[shell") -> Muted
+        else -> TextMain
+    }
+    Text(
+        line,
+        color = color,
+        fontFamily = Mono,
+        fontSize = 12.sp,
+        lineHeight = 17.sp,
+        modifier = Modifier.padding(bottom = 2.dp)
+    )
 }
 
 @Composable
 fun ExtraKeys(onKey: (String) -> Unit) {
-    val keys = listOf("|", "/", "~", "-", "&&", ";", "\$")
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        for (k in keys) {
-            OutlinedButton(
-                onClick = { onKey(k) },
-                modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(horizontal = 2.dp)
-            ) {
-                Text(k, fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+    val rows: List<List<String>> = listOf(
+        listOf("|", "/", "~", "-", "&&", ";", "\$"),
+        listOf(">", "<", "*", "\"", "'", "=", ".")
+    )
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        for (row in rows) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                for (k in row) {
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .height(36.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Surface2)
+                            .clickable { onKey(k) },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(k, color = Accent, fontFamily = Mono, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
             }
         }
     }
 }
 
 @Composable
-fun SetupView(mode: Mode, onMode: (Mode) -> Unit, modifier: Modifier) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Default mode for new sessions")
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(
-                selected = mode == Mode.NONE,
-                onClick = { onMode(Mode.NONE) },
-                label = { Text("None") }
-            )
-            FilterChip(
-                selected = mode == Mode.SHIZUKU,
-                onClick = { onMode(Mode.SHIZUKU) },
-                label = { Text("Shizuku") }
-            )
+fun Pill(label: String, selected: Boolean = false, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (selected) Accent else Surface2)
+            .clickable { onClick() }
+            .padding(horizontal = 14.dp, vertical = 10.dp)
+    ) {
+        Text(
+            label,
+            color = if (selected) Bg else TextMain,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+    }
+}
+
+private const val TERMUX_BASH = "/data/data/com.termux/files/usr/bin/bash"
+private const val TERMUX_HOME = "/data/data/com.termux/files/home"
+
+fun runInTermux(context: Context, command: String): String {
+    val intent = Intent("com.termux.RUN_COMMAND").apply {
+        setClassName("com.termux", "com.termux.app.RunCommandService")
+        putExtra("com.termux.RUN_COMMAND_PATH", TERMUX_BASH)
+        putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-c", command))
+        putExtra("com.termux.RUN_COMMAND_WORKDIR", TERMUX_HOME)
+        putExtra("com.termux.RUN_COMMAND_BACKGROUND", false)
+    }
+    return try {
+        context.startService(intent)
+        "Sent to Termux: $command. Check Termux for progress."
+    } catch (e: Throwable) {
+        "Could not reach Termux: ${e.message ?: e.javaClass.simpleName}. Check the Termux setup step."
+    }
+}
+
+@Composable
+fun PackagesScreen(modifier: Modifier) {
+    val context = LocalContext.current
+    var status by remember {
+        mutableStateOf("Installs run inside Termux. Tap Install, then check Termux for progress.")
+    }
+    val packages: List<String> = listOf(
+        "git", "python", "nodejs", "openssh", "curl", "wget", "vim", "htop", "tmux", "rsync"
+    )
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text("Packages", color = TextMain, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        Text(status, color = Muted, fontSize = 12.sp)
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(packages) { pkg ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Surface)
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(pkg, color = TextMain, fontFamily = Mono, fontSize = 14.sp)
+                    Spacer(Modifier.weight(1f))
+                    Pill("Install", selected = true) {
+                        status = runInTermux(context, "pkg install -y $pkg")
+                    }
+                }
+            }
         }
-        Text("Shizuku: " + PrivilegeManager.status(Mode.SHIZUKU))
-        OutlinedButton(onClick = { PrivilegeManager.requestShizuku() }) {
-            Text("Grant Shizuku")
+    }
+}
+
+@Composable
+fun SetupScreen(mode: Mode, onMode: (Mode) -> Unit, modifier: Modifier) {
+    val context = LocalContext.current
+    val termuxReady = context.checkSelfPermission(TERMUX_PERMISSION) == PackageManager.PERMISSION_GRANTED
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("Setup", color = TextMain, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+
+        Text("Default mode for new sessions", color = Muted, fontSize = 12.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Pill("None", selected = mode == Mode.NONE) { onMode(Mode.NONE) }
+            Pill("Shizuku", selected = mode == Mode.SHIZUKU) { onMode(Mode.SHIZUKU) }
+        }
+
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(Surface)
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text("Shizuku", color = TextMain, fontWeight = FontWeight.SemiBold)
+            Text(PrivilegeManager.status(Mode.SHIZUKU), color = Muted, fontSize = 12.sp)
+            Pill("Grant Shizuku") { PrivilegeManager.requestShizuku() }
+        }
+
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(Surface)
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text("Termux", color = TextMain, fontWeight = FontWeight.SemiBold)
+            Text(
+                if (termuxReady) "Permission granted" else "Permission not granted. Accept the prompt when it appears.",
+                color = Muted,
+                fontSize = 12.sp
+            )
         }
     }
 }
