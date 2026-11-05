@@ -42,6 +42,10 @@ import dev.termdeck.priv.Mode
 import dev.termdeck.priv.PrivilegeManager
 import dev.termdeck.shell.SessionStore
 import android.content.ClipData
+import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalFocusManager
 import android.content.ClipboardManager
 import android.widget.Toast
 import dev.termdeck.shell.ShellSession
@@ -281,6 +285,9 @@ fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit
     val history = remember { mutableStateListOf<String>() }
     var histIdx by remember { mutableStateOf(-1) }
     val listState = rememberLazyListState()
+    val focus = remember { FocusRequester() }
+    val focusManager = LocalFocusManager.current
+    val imeVisible = WindowInsets.isImeVisible
 
     fun send() {
         if (input.isNotBlank()) {
@@ -336,7 +343,19 @@ fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit
             Pill("Copy all") { copyAll() }
         }
 
-        SelectionContainer(Modifier.weight(1f).fillMaxWidth()) {
+        SelectionContainer(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .clickable {
+                    if (imeVisible) {
+                        focusManager.clearFocus()
+                    } else {
+                        focusManager.clearFocus()
+                        focus.requestFocus()
+                    }
+                }
+        ) {
             LazyColumn(
                 state = listState,
                 modifier = Modifier
@@ -370,7 +389,7 @@ fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit
             OutlinedTextField(
                 value = input,
                 onValueChange = { input = it },
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).focusRequester(focus),
                 singleLine = true,
                 placeholder = { Text("command", color = Muted, fontFamily = Mono, fontSize = 14.sp) },
                 textStyle = TextStyle(color = TextMain, fontFamily = Mono, fontSize = 14.sp),
