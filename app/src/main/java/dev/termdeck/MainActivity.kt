@@ -29,23 +29,29 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun TermScreen() {
     val scope = rememberCoroutineScope()
+    val hasRoot = remember { PrivilegeManager.hasRoot() }
     var mode by remember { mutableStateOf(Mode.NONE) }
     var cmd by remember { mutableStateOf("id") }
     var output by remember { mutableStateOf("") }
 
+    val modes: List<Pair<Mode, String>> = buildList {
+        add(Pair(Mode.NONE, "None"))
+        add(Pair(Mode.SHIZUKU, "Shizuku"))
+        if (hasRoot) add(Pair(Mode.ROOT, "Root"))
+    }
+
     Column(
-        Modifier.fillMaxSize().padding(12.dp),
+        Modifier.fillMaxSize().statusBarsPadding().padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf(Mode.NONE to "None", Mode.SHIZUKU to "Shizuku") + if (PrivilegeManager.hasRoot()) listOf(Mode.ROOT to "Root") else emptyList()
-                .forEach { (m, label) ->
-                    FilterChip(
-                        selected = mode == m,
-                        onClick = { mode = m },
-                        label = { Text(label) }
-                    )
-                }
+            for (entry in modes) {
+                FilterChip(
+                    selected = mode == entry.first,
+                    onClick = { mode = entry.first },
+                    label = { Text(entry.second) }
+                )
+            }
         }
         Text("Status: " + PrivilegeManager.status(mode))
         OutlinedTextField(
