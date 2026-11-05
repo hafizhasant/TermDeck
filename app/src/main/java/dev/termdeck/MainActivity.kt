@@ -41,6 +41,9 @@ import androidx.compose.ui.unit.sp
 import dev.termdeck.priv.Mode
 import dev.termdeck.priv.PrivilegeManager
 import dev.termdeck.shell.SessionStore
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.widget.Toast
 import dev.termdeck.shell.ShellSession
 
 private val Bg = Color(0xFF0D0F14)
@@ -272,18 +275,34 @@ fun Tag(label: String) {
 
 @Composable
 fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit) {
+    val ctx = LocalContext.current
+    val clipboard = ctx.getSystemService(ClipboardManager::class.java)
     var input by remember { mutableStateOf("") }
     val history = remember { mutableStateListOf<String>() }
     var histIdx by remember { mutableStateOf(-1) }
     val listState = rememberLazyListState()
 
-    val send: () -> Unit = {
+    fun send() {
         if (input.isNotBlank()) {
             history.add(input)
             histIdx = -1
             session.send(input)
             input = ""
         }
+    }
+
+    fun paste() {
+        val text = clipboard?.primaryClip?.getItemAt(0)?.coerceToText(ctx)?.toString()
+        if (text.isNullOrEmpty()) {
+            Toast.makeText(ctx, "Clipboard is empty", Toast.LENGTH_SHORT).show()
+        } else {
+            input += text.replace("\n", " ")
+        }
+    }
+
+    fun copyAll() {
+        clipboard?.setPrimaryClip(ClipData.newPlainText("TermDeck", session.lines.joinToString("\n")))
+        Toast.makeText(ctx, "Output copied", Toast.LENGTH_SHORT).show()
     }
 
     LaunchedEffect(session.lines.size) {
@@ -302,18 +321,19 @@ fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit
                     .clickable { onBack() },
                 contentAlignment = Alignment.Center
             ) {
-                Text("‹", color = TextMain, fontSize = 20.sp)
+                Text("<", color = TextMain, fontSize = 18.sp)
             }
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text(session.name, color = TextMain, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                 Text(
-                    "~ · ${session.mode.name.lowercase()}",
+                    (if (session.isRunning) "running" else "stopped") + " · " + session.mode.name.lowercase(),
                     color = Muted,
                     fontFamily = Mono,
                     fontSize = 11.sp
                 )
             }
+            Pill("Copy all") { copyAll() }
         }
 
         SelectionContainer(Modifier.weight(1f).fillMaxWidth()) {
@@ -347,27 +367,27 @@ fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit
         }
 
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Box(
-                Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(Surface2)
-                    .padding(horizontal = 14.dp, vertical = 12.dp)
-            ) {
-                BasicTextField(
-                    value = input,
-                    onValueChange = { input = it },
-                    singleLine = true,
-                    textStyle = TextStyle(color = TextMain, fontFamily = Mono, fontSize = 14.sp),
-                    cursorBrush = SolidColor(Accent),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                    keyboardActions = KeyboardActions(onSend = { send() }),
-                    modifier = Modifier.fillMaxWidth()
+            OutlinedTextField(
+                value = input,
+                onValueChange = { input = it },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+                placeholder = { Text("command", color = Muted, fontFamily = Mono, fontSize = 14.sp) },
+                textStyle = TextStyle(color = TextMain, fontFamily = Mono, fontSize = 14.sp),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                keyboardActions = KeyboardActions(onSend = { send() }),
+                shape = RoundedCornerShape(14.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = Accent,
+                    unfocusedBorderColor = Line,
+                    focusedContainerColor = Surface2,
+                    unfocusedContainerColor = Surface2,
+                    cursorColor = Accent,
+                    focusedTextColor = TextMain,
+                    unfocusedTextColor = TextMain
                 )
-                if (input.isEmpty()) {
-                    Text("command", color = Muted, fontFamily = Mono, fontSize = 14.sp)
-                }
-            }
+            )
+            Pill("Paste") { paste() }
             Pill("Run", selected = true) { send() }
         }
     }
