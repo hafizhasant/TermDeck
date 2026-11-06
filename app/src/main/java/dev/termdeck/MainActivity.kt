@@ -320,8 +320,11 @@ fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit
         if (imeVisible) {
             imm?.hideSoftInputFromWindow(v.windowToken, 0)
         } else {
-            v.requestFocus()
-            imm?.showSoftInput(v, InputMethodManager.SHOW_IMPLICIT)
+            v.post {
+                v.requestFocus()
+                imm?.restartInput(v)
+                imm?.showSoftInput(v, InputMethodManager.SHOW_FORCED)
+            }
         }
     }
 
@@ -373,6 +376,7 @@ fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Pill("Keys") { toggleKeyboard() }
                 Pill("Paste") { paste() }
                 Pill("Copy") { copyAll() }
             }
@@ -679,7 +683,7 @@ class TermInput(context: Context) : View(context) {
     override fun onCheckIsTextEditor(): Boolean = true
 
     override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
-        outAttrs.inputType = InputType.TYPE_NULL
+        outAttrs.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
         outAttrs.imeOptions = EditorInfo.IME_ACTION_NONE or
             EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_FLAG_NO_FULLSCREEN
         return object : BaseInputConnection(this@TermInput, false) {
