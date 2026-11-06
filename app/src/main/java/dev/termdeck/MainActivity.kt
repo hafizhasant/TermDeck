@@ -42,7 +42,6 @@ import dev.termdeck.priv.Mode
 import dev.termdeck.priv.PrivilegeManager
 import dev.termdeck.shell.SessionStore
 import android.content.ClipData
-import android.content.Context
 import android.text.InputType
 import android.view.KeyEvent
 import android.view.View
