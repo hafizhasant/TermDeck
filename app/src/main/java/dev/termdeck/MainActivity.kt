@@ -345,7 +345,6 @@ fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Pill("^C") { session.sendRaw("\u0003") }
                 Pill("Paste") { paste() }
                 Pill("Copy") { copyAll() }
             }
