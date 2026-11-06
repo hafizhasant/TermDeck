@@ -42,6 +42,15 @@ import dev.termdeck.priv.Mode
 import dev.termdeck.priv.PrivilegeManager
 import dev.termdeck.shell.SessionStore
 import android.content.ClipData
+import android.content.Context
+import android.text.InputType
+import android.view.KeyEvent
+import android.view.View
+import android.view.inputmethod.BaseInputConnection
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
+import android.view.inputmethod.InputMethodManager
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -294,8 +303,7 @@ fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit
     val focusManager = LocalFocusManager.current
     val imeVisible = WindowInsets.isImeVisible
 
-    val base = "\u200B"
-    var typed by remember { mutableStateOf(base) }
+    val holder = remember { arrayOfNulls<TermInput>(1) }
     val alt = session.altMode
 
     fun paste() {
@@ -304,6 +312,17 @@ fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit
             Toast.makeText(ctx, "Clipboard is empty", Toast.LENGTH_SHORT).show()
         } else {
             session.sendRaw(text.replace("\r", "").replace("\n", "\r"))
+        }
+    }
+
+    fun toggleKeyboard() {
+        val v = holder[0] ?: return
+        val imm = ctx.getSystemService(InputMethodManager::class.java)
+        if (imeVisible) {
+            imm?.hideSoftInputFromWindow(v.windowToken, 0)
+        } else {
+            v.requestFocus()
+            imm?.showSoftInput(v, InputMethodManager.SHOW_IMPLICIT)
         }
     }
 
@@ -378,9 +397,7 @@ fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(14.dp))
                 .background(Surface)
-                .clickable {
-                    if (imeVisible) focusManager.clearFocus() else focus.requestFocus()
-                }
+                .clickable { toggleKeyboard() }
         ) {
             Column(
                 Modifier
@@ -399,27 +416,11 @@ fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit
             }
         }
 
-        // Hidden field that receives keystrokes. Each change sends only the difference.
-        BasicTextField(
-            value = typed,
-            onValueChange = { newValue ->
-                if (newValue.isEmpty()) {
-                    session.sendRaw("\u007F")
-                } else {
-                    val text = newValue.replace(base, "").replace("\n", "\r")
-                    if (text.isNotEmpty()) session.sendRaw(text)
-                }
-                typed = base
-            },
-            modifier = Modifier.size(1.dp).focusRequester(focus),
-            textStyle = TextStyle(color = Color.Transparent, fontSize = 1.sp),
-            cursorBrush = SolidColor(Color.Transparent),
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-            keyboardActions = KeyboardActions(onSend = {
-                session.sendRaw("\r")
-                typed = base
-            })
+        // Real input view. Keystrokes go straight to the shell.
+        AndroidView(
+            factory = { c -> TermInput(c).also { holder[0] = it } },
+            update = { v -> v.send = { text -> session.sendRaw(text) } },
+            modifier = Modifier.size(1.dp)
         )
     }
 }
@@ -663,5 +664,78 @@ fun runPty(p: Process): String {
         if (clean.isBlank()) "no output" else clean.take(1500)
     } catch (e: Throwable) {
         "error: " + (e.message ?: e.javaClass.simpleName)
+    }
+}
+
+// A view that acts as a text input for the terminal. Each keystroke, backspace,
+// and Enter is sent to the shell in order, with no text field to get out of sync.
+class TermInput(context: Context) : View(context) {
+    var send: (String) -> Unit = {}
+
+    init {
+        isFocusable = true
+        isFocusableInTouchMode = true
+    }
+
+    override fun onCheckIsTextEditor(): Boolean = true
+
+    override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
+        outAttrs.inputType = InputType.TYPE_NULL
+        outAttrs.imeOptions = EditorInfo.IME_ACTION_NONE or
+            EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_FLAG_NO_FULLSCREEN
+        return object : BaseInputConnection(this@TermInput, false) {
+            private var composing = ""
+
+            override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
+                composing = ""
+                val t = text?.toString() ?: return true
+                if (t.isNotEmpty()) send(t.replace("\n", "\r"))
+                return true
+            }
+
+            override fun setComposingText(text: CharSequence?, newCursorPosition: Int): Boolean {
+                val now = text?.toString() ?: ""
+                var common = 0
+                val max = minOf(composing.length, now.length)
+                while (common < max && composing[common] == now[common]) common++
+                val sb = StringBuilder()
+                repeat(composing.length - common) { sb.append('\u007F') }
+                sb.append(now.substring(common))
+                if (sb.isNotEmpty()) send(sb.toString().replace("\n", "\r"))
+                composing = now
+                return true
+            }
+
+            override fun finishComposingText(): Boolean {
+                composing = ""
+                return true
+            }
+
+            override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
+                repeat(beforeLength) { send("\u007F") }
+                composing = composing.dropLast(beforeLength)
+                return true
+            }
+
+            override fun sendKeyEvent(event: KeyEvent): Boolean {
+                if (event.action != KeyEvent.ACTION_DOWN) return true
+                when (event.keyCode) {
+                    KeyEvent.KEYCODE_DEL -> send("\u007F")
+                    KeyEvent.KEYCODE_ENTER -> send("\r")
+                    KeyEvent.KEYCODE_TAB -> send("\t")
+                    KeyEvent.KEYCODE_ESCAPE -> send("\u001b")
+                    else -> {
+                        val c = event.unicodeChar
+                        if (c != 0) send(c.toChar().toString())
+                    }
+                }
+                return true
+            }
+
+            override fun performEditorAction(actionCode: Int): Boolean {
+                send("\r")
+                return true
+            }
+        }
     }
 }
