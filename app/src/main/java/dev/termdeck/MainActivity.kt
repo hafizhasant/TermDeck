@@ -42,6 +42,7 @@ import dev.termdeck.priv.Mode
 import dev.termdeck.priv.PrivilegeManager
 import dev.termdeck.shell.SessionStore
 import android.content.ClipData
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.text.SpanStyle
@@ -288,19 +289,14 @@ fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit
     val ctx = LocalContext.current
     val clipboard = ctx.getSystemService(ClipboardManager::class.java)
     val scrollState = rememberScrollState()
-    val annotated = buildAnnotatedString {
-        session.lines.forEachIndexed { i, line ->
-            append(line)
-            if (i < session.lines.lastIndex) append("\n")
-        }
-    }
+    val hScroll = rememberScrollState()
     val focus = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
     val imeVisible = WindowInsets.isImeVisible
 
-    // A zero-width sentinel lets Backspace on an empty field still reach the shell.
     val base = "\u200B"
     var typed by remember { mutableStateOf(base) }
+    val alt = session.altMode
 
     fun paste() {
         val text = clipboard?.primaryClip?.getItemAt(0)?.coerceToText(ctx)?.toString()
@@ -312,12 +308,24 @@ fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit
     }
 
     fun copyAll() {
-        clipboard?.setPrimaryClip(ClipData.newPlainText("TermDeck", session.lines.joinToString("\n") { it.text }))
+        clipboard?.setPrimaryClip(ClipData.newPlainText("TermDeck", session.allText()))
         Toast.makeText(ctx, "Output copied", Toast.LENGTH_SHORT).show()
     }
 
-    // Scroll whenever a line is added or the current line changes, so typing stays visible.
-    LaunchedEffect(session.lines.size, session.lines.lastOrNull()) {
+    val annotated = buildAnnotatedString {
+        if (!alt) {
+            session.lines.forEach {
+                append(it)
+                append("\n")
+            }
+        }
+        session.live.forEachIndexed { i, l ->
+            append(l)
+            if (i < session.live.lastIndex) append("\n")
+        }
+    }
+
+    LaunchedEffect(annotated.text.length) {
         withFrameNanos { }
         scrollState.animateScrollTo(scrollState.maxValue)
     }
@@ -338,7 +346,9 @@ fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit
             Column(Modifier.weight(1f)) {
                 Text(session.name, color = TextMain, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                 Text(
-                    (if (session.isRunning) "running" else "stopped") + " · " + session.mode.name.lowercase(),
+                    (if (session.isRunning) "running" else "stopped") +
+                        " · " + session.mode.name.lowercase() +
+                        (if (alt) " · full screen" else ""),
                     color = Muted,
                     fontFamily = Mono,
                     fontSize = 11.sp
@@ -376,9 +386,16 @@ fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit
                 Modifier
                     .fillMaxSize()
                     .verticalScroll(scrollState)
+                    .then(if (alt) Modifier.horizontalScroll(hScroll) else Modifier)
                     .padding(12.dp)
             ) {
-                Text(annotated, fontFamily = Mono, fontSize = 12.sp, lineHeight = 17.sp)
+                Text(
+                    annotated,
+                    fontFamily = Mono,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                    softWrap = !alt
+                )
             }
         }
 
