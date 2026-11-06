@@ -315,17 +315,27 @@ fun TerminalScreen(session: ShellSession, modifier: Modifier, onBack: () -> Unit
     }
 
     fun toggleKeyboard() {
-        val v = holder[0] ?: return
+        val v = holder[0]
+        if (v == null) {
+            Toast.makeText(ctx, "Input view not created", Toast.LENGTH_SHORT).show()
+            return
+        }
         val imm = ctx.getSystemService(InputMethodManager::class.java)
         if (imeVisible) {
             imm?.hideSoftInputFromWindow(v.windowToken, 0)
-        } else {
-            v.post {
-                v.requestFocus()
-                imm?.restartInput(v)
-                imm?.showSoftInput(v, InputMethodManager.SHOW_FORCED)
-            }
+            return
         }
+        v.requestFocus()
+        imm?.showSoftInput(v, InputMethodManager.SHOW_IMPLICIT)
+        v.postDelayed({
+            v.requestFocus()
+            imm?.showSoftInput(v, InputMethodManager.SHOW_IMPLICIT)
+            Toast.makeText(
+                ctx,
+                "attached=${v.isAttachedToWindow} focus=${v.hasFocus()} ime=$imeVisible",
+                Toast.LENGTH_LONG
+            ).show()
+        }, 300)
     }
 
     fun copyAll() {
